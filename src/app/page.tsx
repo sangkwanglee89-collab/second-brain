@@ -14,25 +14,40 @@ type GeneratedFile = {
   content: string;
 };
 
-type AppMode = "loading" | "welcome" | "onboarding" | "results" | "brain";
+type SharingSetting = {
+  file_name: string;
+  shared: boolean;
+};
+
+type Partnership = {
+  id: string;
+  partnerId: string;
+  partnerEmail: string;
+} | null;
+
+type AppMode = "loading" | "welcome" | "onboarding" | "results" | "brain" | "partner-chat" | "settings";
 
 export default function Home() {
   const [mode, setMode] = useState<AppMode>("loading");
   const [user, setUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [brainMessages, setBrainMessages] = useState<Message[]>([]);
+  const [partnerMessages, setPartnerMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [updating, setUpdating] = useState(false);
-  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [files, setFiles] = useState<GeneratedFile[] | null>(null);
   const [activeFile, setActiveFile] = useState(0);
+  const [partnership, setPartnership] = useState<Partnership>(null);
+  const [sharingSettings, setSharingSettings] = useState<SharingSetting[]>([]);
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [partnerFiles, setPartnerFiles] = useState<GeneratedFile[]>([]);
+  const [partnerEmail, setPartnerEmail] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const supabase = createClient();
 
-  // Check auth and load files on mount
   useEffect(() => {
     async function init() {
       const { data: { user } } = await supabase.auth.getUser();
@@ -44,7 +59,6 @@ export default function Home() {
 
       setUser(user);
 
-      // Load vault files from database
       const { data: vaultFiles } = await supabase
         .from("vault_files")
         .select("name, content")
@@ -56,6 +70,28 @@ export default function Home() {
       } else {
         setMode("welcome");
       }
+
+      // Load partnership
+      const partnerRes = await fetch("/api/partner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "get-partnership", userId: user.id }),
+      });
+      const partnerData = await partnerRes.json();
+      if (partnerData.partnership) {
+        setPartnership(partnerData.partnership);
+      }
+
+      // Load sharing settings
+      const sharingRes = await fetch("/api/partner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "get-sharing", userId: user.id }),
+      });
+      const sharingData = await sharingRes.json();
+      if (sharingData.settings) {
+        setSharingSettings(sharingData.settings);
+      }
     }
 
     init();
@@ -63,7 +99,7 @@ export default function Home() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, brainMessages]);
+  }, [messages, brainMessages, partnerMessages]);
 
   async function saveFilesToDb(filesToSave: GeneratedFile[]) {
     if (!user) return;
@@ -111,11 +147,14 @@ export default function Home() {
     if (!input.trim() || loading) return;
 
     const userMessage: Message = { role: "user", content: input.trim() };
+    const isPartnerChat = mode === "partner-chat";
     const isBrain = mode === "brain";
-    const currentMessages = isBrain ? brainMessages : messages;
+    const currentMessages = isPartnerChat ? partnerMessages : isBrain ? brainMessages : messages;
     const updatedMessages = [...currentMessages, userMessage];
 
-    if (isBrain) {
+    if (isPartnerChat) {
+      setPartnerMessages(updatedMessages);
+    } else if (isBrain) {
       setBrainMessages(updatedMessages);
     } else {
       setMessages(updatedMessages);
@@ -124,10 +163,16 @@ export default function Home() {
     setLoading(true);
 
     try {
-      const endpoint = isBrain ? "/api/brain" : "/api/chat";
-      const body = isBrain
-        ? { messages: updatedMessages, files }
-        : { messages: updatedMessages };
+      let endpoint = "/api/chat";
+      let body: Record<string, unknown> = { messages: updatedMessages };
+
+      if (isBrain) {
+        endpoint = "/api/brain";
+        body = { messages: updatedMessages, files };
+      } else if (isPartnerChat) {
+        endpoint = "/api/partner-chat";
+        body = { messages: updatedMessages, files: partnerFiles, partnerName: partnerEmail.split("@")[0] };
+      }
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -140,14 +185,18 @@ export default function Home() {
         { role: "assistant" as const, content: data.text },
       ];
 
-      if (isBrain) {
+      if (isPartnerChat) {
+        setPartnerMessages(withResponse);
+      } else if (isBrain) {
         setBrainMessages(withResponse);
       } else {
         setMessages(withResponse);
       }
     } catch {
       const errorMsg = { role: "assistant" as const, content: "Something went wrong. Please try again." };
-      if (isBrain) {
+      if (isPartnerChat) {
+        setPartnerMessages([...updatedMessages, errorMsg]);
+      } else if (isBrain) {
         setBrainMessages([...updatedMessages, errorMsg]);
       } else {
         setMessages([...updatedMessages, errorMsg]);
@@ -184,7 +233,6 @@ export default function Home() {
   async function handleUpdateVault() {
     if (!files || brainMessages.length === 0) return;
     setUpdating(true);
-    setUpdateStatus(null);
 
     try {
       const res = await fetch("/api/update", {
@@ -262,6 +310,65 @@ export default function Home() {
     setMode("welcome");
   }
 
+  async function generateInvite() {
+    if (!user) return;
+    const res = await fetch("/api/partner", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create-invite", userId: user.id }),
+    });
+    const data = await res.json();
+    if (data.inviteCode) {
+      setInviteCode(data.inviteCode);
+    } else {
+      alert(data.error || "Failed to create invite.");
+    }
+  }
+
+  async function updateSharing(fileName: string, shared: boolean) {
+    if (!user || !files) return;
+
+    const updated = sharingSettings.map((s) =>
+      s.file_name === fileName ? { ...s, shared } : s
+    );
+    // If setting doesn't exist yet, add it
+    if (!updated.find((s) => s.file_name === fileName)) {
+      updated.push({ file_name: fileName, shared });
+    }
+    setSharingSettings(updated);
+
+    await fetch("/api/partner", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "update-sharing",
+        userId: user.id,
+        fileNames: [fileName],
+        shared: [shared],
+      }),
+    });
+  }
+
+  async function startPartnerChat() {
+    if (!user) return;
+
+    const res = await fetch("/api/partner", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "get-partner-files", userId: user.id }),
+    });
+    const data = await res.json();
+
+    if (data.files && data.files.length > 0) {
+      setPartnerFiles(data.files);
+      setPartnerEmail(data.partnerEmail);
+      setPartnerMessages([]);
+      setMode("partner-chat");
+    } else {
+      alert("Your partner hasn't shared any files yet.");
+    }
+  }
+
   // Loading screen
   if (mode === "loading") {
     return (
@@ -301,6 +408,131 @@ export default function Home() {
             >
               Log out ({user?.email})
             </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Settings view
+  if (mode === "settings") {
+    const inviteUrl = inviteCode
+      ? `${window.location.origin}/invite?code=${inviteCode}`
+      : null;
+
+    return (
+      <div className="flex flex-col h-screen bg-zinc-50 dark:bg-zinc-950">
+        <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-4 flex items-center justify-between">
+          <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            Settings
+          </h1>
+          <button
+            onClick={startBrain}
+            className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
+          >
+            Back to Chat
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto px-6 py-8">
+          <div className="max-w-lg mx-auto space-y-10">
+            {/* Partner Connection */}
+            <section>
+              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-4">
+                Partner Connection
+              </h2>
+              {partnership ? (
+                <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                  Connected with <span className="font-medium text-zinc-900 dark:text-zinc-100">{partnership.partnerEmail}</span>
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    No partner connected. Generate an invite link to share.
+                  </p>
+                  <button
+                    onClick={generateInvite}
+                    className="rounded-lg bg-zinc-900 dark:bg-zinc-100 px-4 py-2 text-xs font-medium text-white dark:text-zinc-900 hover:bg-zinc-700 dark:hover:bg-zinc-300 transition-colors"
+                  >
+                    Generate Invite Link
+                  </button>
+                  {inviteUrl && (
+                    <div className="mt-3 p-3 bg-zinc-100 dark:bg-zinc-900 rounded-lg">
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-2">
+                        Send this link to your partner:
+                      </p>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={inviteUrl}
+                          className="flex-1 text-xs bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1.5 text-zinc-700 dark:text-zinc-300"
+                        />
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(inviteUrl);
+                            alert("Link copied!");
+                          }}
+                          className="rounded bg-zinc-900 dark:bg-zinc-100 px-3 py-1.5 text-xs font-medium text-white dark:text-zinc-900 hover:bg-zinc-700 dark:hover:bg-zinc-300 transition-colors"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+
+            {/* Sharing Controls */}
+            {files && (
+              <section>
+                <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-1">
+                  Sharing Controls
+                </h2>
+                <p className="text-xs text-zinc-400 dark:text-zinc-600 mb-4">
+                  Choose which files your partner can see when talking to your avatar.
+                </p>
+                <div className="space-y-2">
+                  {files.map((file) => {
+                    const setting = sharingSettings.find((s) => s.file_name === file.name);
+                    const isShared = setting?.shared || false;
+                    return (
+                      <label
+                        key={file.name}
+                        className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors cursor-pointer"
+                      >
+                        <span className="text-sm text-zinc-700 dark:text-zinc-300">
+                          {file.name}
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={isShared}
+                          onChange={(e) => updateSharing(file.name, e.target.checked)}
+                          className="w-4 h-4 rounded border-zinc-300 dark:border-zinc-600 text-zinc-900 focus:ring-zinc-500"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {/* Account */}
+            <section>
+              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-4">
+                Account
+              </h2>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-4">
+                {user?.email}
+              </p>
+              <button
+                onClick={handleLogout}
+                className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
+              >
+                Log Out
+              </button>
+            </section>
           </div>
         </div>
       </div>
@@ -384,9 +616,15 @@ export default function Home() {
     );
   }
 
-  // Chat interface (onboarding or brain)
+  // Chat interface (onboarding, brain, or partner-chat)
   const isBrain = mode === "brain";
-  const currentMessages = isBrain ? brainMessages : messages;
+  const isPartnerChat = mode === "partner-chat";
+  const currentMessages = isPartnerChat ? partnerMessages : isBrain ? brainMessages : messages;
+  const chatLabel = isPartnerChat
+    ? `Talking to ${partnerEmail.split("@")[0]}'s brain`
+    : isBrain
+    ? "Chat"
+    : "Onboarding";
 
   return (
     <div className="flex flex-col h-screen bg-zinc-50 dark:bg-zinc-950">
@@ -396,7 +634,7 @@ export default function Home() {
             Second Brain
           </h1>
           <p className="text-xs text-zinc-400 dark:text-zinc-600 mt-0.5">
-            {isBrain ? "Chat" : "Onboarding"}
+            {chatLabel}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -409,15 +647,37 @@ export default function Home() {
               >
                 {updating ? "Updating…" : "Update Vault"}
               </button>
+              {partnership && (
+                <button
+                  onClick={startPartnerChat}
+                  className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
+                >
+                  Partner&apos;s Brain
+                </button>
+              )}
               <button
                 onClick={viewFiles}
                 className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
               >
                 View Files
               </button>
+              <button
+                onClick={() => setMode("settings")}
+                className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
+              >
+                Settings
+              </button>
             </>
           )}
-          {!isBrain && messages.length >= 6 && (
+          {isPartnerChat && (
+            <button
+              onClick={startBrain}
+              className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
+            >
+              Back to My Brain
+            </button>
+          )}
+          {!isBrain && !isPartnerChat && messages.length >= 6 && (
             <button
               onClick={handleFinish}
               disabled={generating || loading}
@@ -436,6 +696,11 @@ export default function Home() {
               Ask your second brain anything.
             </p>
           )}
+          {currentMessages.length === 0 && isPartnerChat && (
+            <p className="text-center text-zinc-400 dark:text-zinc-600 mt-32">
+              Ask {partnerEmail.split("@")[0]}&apos;s brain anything.
+            </p>
+          )}
           {currentMessages.map((msg, i) => (
             <div
               key={i}
@@ -445,6 +710,8 @@ export default function Home() {
                 className={`max-w-md px-4 py-3 rounded-2xl text-sm leading-relaxed ${
                   msg.role === "user"
                     ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : isPartnerChat
+                    ? "bg-blue-100 text-blue-900 dark:bg-blue-900 dark:text-blue-100"
                     : "bg-zinc-200 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
                 }`}
               >
@@ -454,7 +721,11 @@ export default function Home() {
           ))}
           {loading && (
             <div className="flex justify-start">
-              <div className="bg-zinc-200 dark:bg-zinc-800 px-4 py-3 rounded-2xl text-sm text-zinc-500">
+              <div className={`px-4 py-3 rounded-2xl text-sm ${
+                isPartnerChat
+                  ? "bg-blue-100 dark:bg-blue-900 text-blue-400"
+                  : "bg-zinc-200 dark:bg-zinc-800 text-zinc-500"
+              }`}>
                 Thinking…
               </div>
             </div>

@@ -34,7 +34,14 @@ export default function AuthPage() {
       if (error) {
         setError(error.message);
       } else {
-        window.location.href = "/";
+        // Check for pending invite
+        const pendingInvite = localStorage.getItem("pending-invite");
+        if (pendingInvite) {
+          localStorage.removeItem("pending-invite");
+          window.location.href = `/invite?code=${pendingInvite}`;
+        } else {
+          window.location.href = "/";
+        }
       }
     }
 
