@@ -3,83 +3,118 @@ import { NextRequest } from "next/server";
 
 const client = new Anthropic();
 
-const UPDATE_SYSTEM_PROMPT = `You are a vault updater for a personal "second brain" app. You will receive:
-1. The user's current vault (a set of markdown files)
-2. A recent conversation between the user and their second brain
+// Step 1: Quick analysis — which files need what changes?
+const ANALYZE_PROMPT = `You are analyzing a conversation to determine what vault updates are needed.
 
-Your job: determine if the conversation revealed anything new, changed, or deepened about the user that should be reflected in their vault. If so, produce updated files. If not, say so.
+You will receive the user's current vault file NAMES (not full content) and a recent conversation. Identify:
+1. Which files need updates and what specifically should be added/changed
+2. Whether any new files should be created
 
-## What Counts as an Update
+Be LIBERAL about detecting updates. New timelines, decisions, concrete details, perspective shifts, and new information all count. The bar is: "Would a future version of the user's second brain be more helpful if it knew this?"
 
-Be LIBERAL about detecting updates. If the user discussed any of these, the vault should be updated:
-- New information not currently in any vault file (new project, new person, new decision, new timeline)
-- A shift in perspective or emotional state about something already in the vault
-- A decision that was previously open and is now resolved (or more resolved)
-- New context that enriches an existing section (e.g., concrete details about something previously mentioned in general terms)
-- A new life domain or topic that doesn't have a file yet
+Respond with JSON only:
+{"changes": [{"file": "career.md", "action": "update", "instructions": "Add a new section about...with these specific details..."}, ...]}
 
-The bar is: "Would a future version of the user's second brain be more helpful if it knew this?" If yes, update.
+If no changes needed: {"changes": []}
 
-Do NOT skip updates just because the vault already covers the general topic. If the conversation added specifics, nuance, decisions, or new framing, that's an update.
+Be specific in instructions — include the actual new information to add, not just "update the AI section." No code fences.`;
 
-## Rules
+// Step 2: Apply changes to a specific file
+const APPLY_PROMPT = `You are updating a single vault file based on specific instructions. You will receive:
+1. The current file content
+2. Instructions for what to add or change
 
-- Preserve everything in the existing files that is still accurate. Do not remove content unless it has been explicitly superseded.
-- Use the same writing style as the existing files — match their tone and structure.
-- Do NOT add information that wasn't discussed in the conversation. No inferences beyond what was explicitly shared.
-- When updating a large file, you MUST include the complete file content — not just the changed section. The output replaces the file entirely.
+Rules:
+- Preserve everything that is still accurate
+- Match the existing writing style and structure
+- Add the new content in the most logical location
+- Do not remove content unless explicitly superseded
+- Return the COMPLETE updated file content
 
-## Output Format
+Respond with the full updated file content only. No JSON wrapper, no code fences, no explanation.`;
 
-If updates are needed, respond with a JSON object:
-\`\`\`
-{"updated": true, "files": [{"name": "identity.md", "content": "...full updated content..."}, ...]}
-\`\`\`
-
-Only include files that changed. Unchanged files should be omitted.
-
-If no updates are needed, respond with:
-\`\`\`
-{"updated": false, "reason": "brief explanation of why no updates were needed"}
-\`\`\`
-
-Respond ONLY with the JSON object. No preamble, no explanation, no markdown code fences around the JSON.`;
+export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   const { messages, files } = await req.json();
 
-  const vaultContext = files
-    .map((f: { name: string; content: string }) => `--- ${f.name} ---\n${f.content}`)
-    .join("\n\n");
-
+  const fileNames = files.map((f: { name: string }) => f.name).join(", ");
   const conversationContext = messages
     .map((m: { role: string; content: string }) => `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}`)
     .join("\n\n");
 
-  const response = await client.messages.create({
+  // Step 1: Quick analysis
+  const analysisResponse = await client.messages.create({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 16384,
-    system: UPDATE_SYSTEM_PROMPT,
+    max_tokens: 2048,
+    system: ANALYZE_PROMPT,
     messages: [
       {
         role: "user",
-        content: `## Current Vault\n\n${vaultContext}\n\n## Recent Conversation\n\n${conversationContext}`,
+        content: `## Vault Files\n${fileNames}\n\n## Recent Conversation\n\n${conversationContext}`,
       },
     ],
   });
 
-  const text =
-    response.content[0].type === "text" ? response.content[0].text : "";
+  const analysisText =
+    analysisResponse.content[0].type === "text" ? analysisResponse.content[0].text : "";
 
+  let analysis;
   try {
-    const cleaned = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
-    const parsed = JSON.parse(cleaned);
-    return Response.json(parsed);
+    const cleaned = analysisText.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+    analysis = JSON.parse(cleaned);
   } catch {
-    console.error("Failed to parse update response:", text.substring(0, 500));
-    return Response.json(
-      { error: "Failed to parse update response", raw: text },
-      { status: 500 }
-    );
+    console.error("Failed to parse analysis:", analysisText.substring(0, 500));
+    return Response.json({ updated: false, reason: "Failed to analyze conversation." });
   }
+
+  if (!analysis.changes || analysis.changes.length === 0) {
+    return Response.json({ updated: false, reason: "No updates needed based on the conversation." });
+  }
+
+  // Step 2: Apply changes to each file
+  const updatedFiles: { name: string; content: string }[] = [];
+
+  for (const change of analysis.changes) {
+    if (change.action === "create") {
+      // New file — generate from scratch
+      const createResponse = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 8192,
+        system: APPLY_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: `## Current File Content\n(New file — no existing content)\n\n## Instructions\nCreate a new file called "${change.file}" with the following content:\n${change.instructions}`,
+          },
+        ],
+      });
+      const content = createResponse.content[0].type === "text" ? createResponse.content[0].text : "";
+      updatedFiles.push({ name: change.file, content: content.trim() });
+    } else {
+      // Update existing file
+      const existingFile = files.find((f: { name: string; content: string }) => f.name === change.file);
+      if (!existingFile) continue;
+
+      const applyResponse = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 16384,
+        system: APPLY_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: `## Current File Content\n\n${existingFile.content}\n\n## Instructions\n\n${change.instructions}`,
+          },
+        ],
+      });
+      const content = applyResponse.content[0].type === "text" ? applyResponse.content[0].text : "";
+      updatedFiles.push({ name: change.file, content: content.trim() });
+    }
+  }
+
+  if (updatedFiles.length === 0) {
+    return Response.json({ updated: false, reason: "No files were updated." });
+  }
+
+  return Response.json({ updated: true, files: updatedFiles });
 }
