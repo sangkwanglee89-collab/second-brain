@@ -290,6 +290,10 @@ export default function Home() {
           >
             Get Started
           </button>
+          <p className="text-xs text-zinc-400 dark:text-zinc-600 leading-relaxed max-w-sm">
+            Powered by Claude (Anthropic). Your conversations are not used
+            to train AI models. Your data is encrypted and private to you.
+          </p>
           <div>
             <button
               onClick={handleLogout}
@@ -490,6 +494,9 @@ export default function Home() {
             Send
           </button>
         </form>
+        <p className="max-w-2xl mx-auto mt-2 text-[10px] text-zinc-300 dark:text-zinc-700 text-right">
+          Powered by Claude (Anthropic) · Not used for AI training · Data encrypted
+        </p>
       </div>
     </div>
   );
