@@ -7,6 +7,7 @@ export default function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -18,6 +19,19 @@ export default function AuthPage() {
     setLoading(true);
     setError(null);
     setMessage(null);
+
+    if (isForgotPassword) {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth?reset=true`,
+      });
+      if (error) {
+        setError(error.message);
+      } else {
+        setMessage("Check your email for a password reset link.");
+      }
+      setLoading(false);
+      return;
+    }
 
     if (isSignUp) {
       const { error } = await supabase.auth.signUp({ email, password });
@@ -55,7 +69,11 @@ export default function AuthPage() {
           Second Brain
         </h1>
         <p className="text-sm text-zinc-400 dark:text-zinc-600 text-center mb-8">
-          {isSignUp ? "Create your account" : "Welcome back"}
+          {isForgotPassword
+            ? "Reset your password"
+            : isSignUp
+            ? "Create your account"
+            : "Welcome back"}
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -67,15 +85,17 @@ export default function AuthPage() {
             required
             className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-3 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:focus:ring-zinc-600"
           />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            required
-            minLength={6}
-            className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-3 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:focus:ring-zinc-600"
-          />
+          {!isForgotPassword && (
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              required
+              minLength={6}
+              className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-3 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:focus:ring-zinc-600"
+            />
+          )}
 
           {error && (
             <p className="text-sm text-red-500">{error}</p>
@@ -89,19 +109,44 @@ export default function AuthPage() {
             disabled={loading}
             className="w-full rounded-xl bg-zinc-900 dark:bg-zinc-100 px-5 py-3 text-sm font-medium text-white dark:text-zinc-900 hover:bg-zinc-700 dark:hover:bg-zinc-300 disabled:opacity-40 transition-colors"
           >
-            {loading ? "…" : isSignUp ? "Sign Up" : "Log In"}
+            {loading
+              ? "…"
+              : isForgotPassword
+              ? "Send Reset Link"
+              : isSignUp
+              ? "Sign Up"
+              : "Log In"}
           </button>
         </form>
 
+        {!isForgotPassword && (
+          <button
+            onClick={() => {
+              setIsForgotPassword(true);
+              setError(null);
+              setMessage(null);
+            }}
+            className="w-full mt-3 text-xs text-zinc-400 dark:text-zinc-600 hover:text-zinc-600 dark:hover:text-zinc-400 transition-colors"
+          >
+            Forgot password?
+          </button>
+        )}
+
         <button
           onClick={() => {
-            setIsSignUp(!isSignUp);
+            if (isForgotPassword) {
+              setIsForgotPassword(false);
+            } else {
+              setIsSignUp(!isSignUp);
+            }
             setError(null);
             setMessage(null);
           }}
-          className="w-full mt-4 text-sm text-zinc-400 dark:text-zinc-600 hover:text-zinc-600 dark:hover:text-zinc-400 transition-colors"
+          className="w-full mt-2 text-sm text-zinc-400 dark:text-zinc-600 hover:text-zinc-600 dark:hover:text-zinc-400 transition-colors"
         >
-          {isSignUp
+          {isForgotPassword
+            ? "Back to log in"
+            : isSignUp
             ? "Already have an account? Log in"
             : "Don't have an account? Sign up"}
         </button>

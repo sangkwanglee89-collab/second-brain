@@ -11,10 +11,14 @@ export default function WelcomeScreen({ userEmail, onStart, onLogout }: WelcomeS
         <h1 className="text-3xl font-semibold text-zinc-900 dark:text-zinc-100">
           Second Brain
         </h1>
-        <p className="text-zinc-500 dark:text-zinc-400 leading-relaxed">
-          Build a personal model that understands how you think. It starts
-          with a conversation — about 15 minutes — and gets sharper the
-          more you use it.
+        <p className="text-base text-zinc-500 dark:text-zinc-400 leading-relaxed">
+          You spend hours consuming other people&apos;s thoughts.
+          When&apos;s the last time you organized your own?
+        </p>
+        <p className="text-sm text-zinc-400 dark:text-zinc-500 leading-relaxed">
+          Second Brain is a thinking partner that helps you see your own
+          thinking clearly. It starts with a 15-minute conversation — and
+          gets sharper the more you use it.
         </p>
         <button
           onClick={onStart}
@@ -23,8 +27,7 @@ export default function WelcomeScreen({ userEmail, onStart, onLogout }: WelcomeS
           Get Started
         </button>
         <p className="text-xs text-zinc-400 dark:text-zinc-600 leading-relaxed max-w-sm">
-          Powered by Claude (Anthropic). Your conversations are not used
-          to train AI models. Your data is encrypted and private to you.
+          Private by design. Your data is yours. Not used to train AI.
         </p>
         <div>
           <button
