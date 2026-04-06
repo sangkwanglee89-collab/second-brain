@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { createClient } from "@/lib/supabase";
+import type { User } from "@supabase/supabase-js";
 
 type Message = {
   role: "user" | "assistant";
@@ -12,10 +14,11 @@ type GeneratedFile = {
   content: string;
 };
 
-type AppMode = "welcome" | "onboarding" | "results" | "brain";
+type AppMode = "loading" | "welcome" | "onboarding" | "results" | "brain";
 
 export default function Home() {
-  const [mode, setMode] = useState<AppMode>("welcome");
+  const [mode, setMode] = useState<AppMode>("loading");
+  const [user, setUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [brainMessages, setBrainMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -27,19 +30,58 @@ export default function Home() {
   const [activeFile, setActiveFile] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load saved files from localStorage on mount
+  const supabase = createClient();
+
+  // Check auth and load files on mount
   useEffect(() => {
-    const saved = localStorage.getItem("second-brain-files");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      setFiles(parsed);
-      setMode("brain");
+    async function init() {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) {
+        window.location.href = "/auth";
+        return;
+      }
+
+      setUser(user);
+
+      // Load vault files from database
+      const { data: vaultFiles } = await supabase
+        .from("vault_files")
+        .select("name, content")
+        .eq("user_id", user.id);
+
+      if (vaultFiles && vaultFiles.length > 0) {
+        setFiles(vaultFiles);
+        setMode("brain");
+      } else {
+        setMode("welcome");
+      }
     }
-  }, []);
+
+    init();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, brainMessages]);
+
+  async function saveFilesToDb(filesToSave: GeneratedFile[]) {
+    if (!user) return;
+
+    for (const file of filesToSave) {
+      await supabase
+        .from("vault_files")
+        .upsert(
+          { user_id: user.id, name: file.name, content: file.content, updated_at: new Date().toISOString() },
+          { onConflict: "user_id,name" }
+        );
+    }
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    window.location.href = "/auth";
+  }
 
   async function startOnboarding() {
     setMode("onboarding");
@@ -127,7 +169,7 @@ export default function Home() {
       const data = await res.json();
       if (data.files) {
         setFiles(data.files);
-        localStorage.setItem("second-brain-files", JSON.stringify(data.files));
+        await saveFilesToDb(data.files);
         setMode("results");
       } else {
         alert("Something went wrong generating your files. Please try again.");
@@ -136,6 +178,44 @@ export default function Home() {
       alert("Something went wrong generating your files. Please try again.");
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function handleUpdateVault() {
+    if (!files || brainMessages.length === 0) return;
+    setUpdating(true);
+    setUpdateStatus(null);
+
+    try {
+      const res = await fetch("/api/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: brainMessages, files }),
+      });
+      const data = await res.json();
+
+      if (data.updated && data.files) {
+        const updatedFiles = files.map((existing) => {
+          const updated = data.files.find(
+            (f: GeneratedFile) => f.name === existing.name
+          );
+          return updated || existing;
+        });
+        const existingNames = new Set(files.map((f) => f.name));
+        const newFiles = data.files.filter(
+          (f: GeneratedFile) => !existingNames.has(f.name)
+        );
+        const allFiles = [...updatedFiles, ...newFiles];
+        setFiles(allFiles);
+        await saveFilesToDb(data.files);
+        alert(`Updated ${data.files.length} file${data.files.length > 1 ? "s" : ""}.`);
+      } else {
+        alert(data.reason || "No updates needed.");
+      }
+    } catch {
+      alert("Something went wrong. Please try again.");
+    } finally {
+      setUpdating(false);
     }
   }
 
@@ -162,59 +242,33 @@ export default function Home() {
     setMode("brain");
   }
 
-  async function handleUpdateVault() {
-    if (!files || brainMessages.length === 0) return;
-    setUpdating(true);
-    setUpdateStatus(null);
-
-    try {
-      const res = await fetch("/api/update", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: brainMessages, files }),
-      });
-      const data = await res.json();
-
-      if (data.updated && data.files) {
-        const updatedFiles = files.map((existing) => {
-          const updated = data.files.find(
-            (f: GeneratedFile) => f.name === existing.name
-          );
-          return updated || existing;
-        });
-        // Add any new domain files
-        const existingNames = new Set(files.map((f) => f.name));
-        const newFiles = data.files.filter(
-          (f: GeneratedFile) => !existingNames.has(f.name)
-        );
-        const allFiles = [...updatedFiles, ...newFiles];
-        setFiles(allFiles);
-        localStorage.setItem("second-brain-files", JSON.stringify(allFiles));
-        setUpdateStatus(`Updated ${data.files.length} file${data.files.length > 1 ? "s" : ""}`);
-      } else {
-        setUpdateStatus(data.reason || "No updates needed");
-      }
-    } catch {
-      setUpdateStatus("Something went wrong. Try again.");
-    } finally {
-      setUpdating(false);
-      setTimeout(() => setUpdateStatus(null), 4000);
-    }
-  }
-
   function viewFiles() {
     setMode("results");
   }
 
-  function resetAll() {
+  async function resetAll() {
     if (!confirm("This will permanently delete your second brain and all generated files. You'll need to re-do onboarding from scratch. Are you sure?")) {
       return;
     }
-    localStorage.removeItem("second-brain-files");
+    if (user) {
+      await supabase
+        .from("vault_files")
+        .delete()
+        .eq("user_id", user.id);
+    }
     setFiles(null);
     setMessages([]);
     setBrainMessages([]);
     setMode("welcome");
+  }
+
+  // Loading screen
+  if (mode === "loading") {
+    return (
+      <div className="flex flex-col h-screen bg-zinc-50 dark:bg-zinc-950 items-center justify-center">
+        <p className="text-sm text-zinc-400">Loading…</p>
+      </div>
+    );
   }
 
   // Welcome screen
@@ -236,6 +290,14 @@ export default function Home() {
           >
             Get Started
           </button>
+          <div>
+            <button
+              onClick={handleLogout}
+              className="text-xs text-zinc-400 dark:text-zinc-600 hover:text-zinc-600 dark:hover:text-zinc-400 transition-colors"
+            >
+              Log out ({user?.email})
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -333,14 +395,9 @@ export default function Home() {
             {isBrain ? "Chat" : "Onboarding"}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           {isBrain && (
-            <div className="flex items-center gap-2">
-              {updateStatus && (
-                <span className="text-xs text-zinc-400 dark:text-zinc-500">
-                  {updateStatus}
-                </span>
-              )}
+            <>
               <button
                 onClick={handleUpdateVault}
                 disabled={updating || brainMessages.length === 0}
@@ -354,7 +411,7 @@ export default function Home() {
               >
                 View Files
               </button>
-            </div>
+            </>
           )}
           {!isBrain && messages.length >= 6 && (
             <button
