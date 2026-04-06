@@ -12,22 +12,37 @@ type GeneratedFile = {
   content: string;
 };
 
+type AppMode = "welcome" | "onboarding" | "results" | "brain";
+
 export default function Home() {
+  const [mode, setMode] = useState<AppMode>("welcome");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [brainMessages, setBrainMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [started, setStarted] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [files, setFiles] = useState<GeneratedFile[] | null>(null);
   const [activeFile, setActiveFile] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Load saved files from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem("second-brain-files");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      setFiles(parsed);
+      setMode("brain");
+    }
+  }, []);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, brainMessages]);
 
   async function startOnboarding() {
-    setStarted(true);
+    setMode("onboarding");
     setLoading(true);
 
     try {
@@ -54,27 +69,47 @@ export default function Home() {
     if (!input.trim() || loading) return;
 
     const userMessage: Message = { role: "user", content: input.trim() };
-    const updatedMessages = [...messages, userMessage];
-    setMessages(updatedMessages);
+    const isBrain = mode === "brain";
+    const currentMessages = isBrain ? brainMessages : messages;
+    const updatedMessages = [...currentMessages, userMessage];
+
+    if (isBrain) {
+      setBrainMessages(updatedMessages);
+    } else {
+      setMessages(updatedMessages);
+    }
     setInput("");
     setLoading(true);
 
     try {
-      const res = await fetch("/api/chat", {
+      const endpoint = isBrain ? "/api/brain" : "/api/chat";
+      const body = isBrain
+        ? { messages: updatedMessages, files }
+        : { messages: updatedMessages };
+
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: updatedMessages }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
-      setMessages([
+      const withResponse = [
         ...updatedMessages,
-        { role: "assistant", content: data.text },
-      ]);
+        { role: "assistant" as const, content: data.text },
+      ];
+
+      if (isBrain) {
+        setBrainMessages(withResponse);
+      } else {
+        setMessages(withResponse);
+      }
     } catch {
-      setMessages([
-        ...updatedMessages,
-        { role: "assistant", content: "Something went wrong. Please try again." },
-      ]);
+      const errorMsg = { role: "assistant" as const, content: "Something went wrong. Please try again." };
+      if (isBrain) {
+        setBrainMessages([...updatedMessages, errorMsg]);
+      } else {
+        setMessages([...updatedMessages, errorMsg]);
+      }
     } finally {
       setLoading(false);
     }
@@ -92,6 +127,8 @@ export default function Home() {
       const data = await res.json();
       if (data.files) {
         setFiles(data.files);
+        localStorage.setItem("second-brain-files", JSON.stringify(data.files));
+        setMode("results");
       } else {
         alert("Something went wrong generating your files. Please try again.");
       }
@@ -112,12 +149,76 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }
 
-  function downloadAll() {
-    files?.forEach((file) => downloadFile(file));
+  async function downloadAll() {
+    if (!files) return;
+    for (const file of files) {
+      downloadFile(file);
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  function startBrain() {
+    setBrainMessages([]);
+    setMode("brain");
+  }
+
+  async function handleUpdateVault() {
+    if (!files || brainMessages.length === 0) return;
+    setUpdating(true);
+    setUpdateStatus(null);
+
+    try {
+      const res = await fetch("/api/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: brainMessages, files }),
+      });
+      const data = await res.json();
+
+      if (data.updated && data.files) {
+        const updatedFiles = files.map((existing) => {
+          const updated = data.files.find(
+            (f: GeneratedFile) => f.name === existing.name
+          );
+          return updated || existing;
+        });
+        // Add any new domain files
+        const existingNames = new Set(files.map((f) => f.name));
+        const newFiles = data.files.filter(
+          (f: GeneratedFile) => !existingNames.has(f.name)
+        );
+        const allFiles = [...updatedFiles, ...newFiles];
+        setFiles(allFiles);
+        localStorage.setItem("second-brain-files", JSON.stringify(allFiles));
+        setUpdateStatus(`Updated ${data.files.length} file${data.files.length > 1 ? "s" : ""}`);
+      } else {
+        setUpdateStatus(data.reason || "No updates needed");
+      }
+    } catch {
+      setUpdateStatus("Something went wrong. Try again.");
+    } finally {
+      setUpdating(false);
+      setTimeout(() => setUpdateStatus(null), 4000);
+    }
+  }
+
+  function viewFiles() {
+    setMode("results");
+  }
+
+  function resetAll() {
+    if (!confirm("This will permanently delete your second brain and all generated files. You'll need to re-do onboarding from scratch. Are you sure?")) {
+      return;
+    }
+    localStorage.removeItem("second-brain-files");
+    setFiles(null);
+    setMessages([]);
+    setBrainMessages([]);
+    setMode("welcome");
   }
 
   // Welcome screen
-  if (!started) {
+  if (mode === "welcome") {
     return (
       <div className="flex flex-col h-screen bg-zinc-50 dark:bg-zinc-950 items-center justify-center">
         <div className="max-w-md text-center space-y-6 px-6">
@@ -141,7 +242,7 @@ export default function Home() {
   }
 
   // Results view
-  if (files) {
+  if (mode === "results" && files) {
     return (
       <div className="flex flex-col h-screen bg-zinc-50 dark:bg-zinc-950">
         <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-4 flex items-center justify-between">
@@ -153,16 +254,23 @@ export default function Home() {
               {files.length} files generated
             </p>
           </div>
-          <button
-            onClick={downloadAll}
-            className="rounded-lg bg-zinc-900 dark:bg-zinc-100 px-4 py-2 text-xs font-medium text-white dark:text-zinc-900 hover:bg-zinc-700 dark:hover:bg-zinc-300 transition-colors"
-          >
-            Download All
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={downloadAll}
+              className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
+            >
+              Download All
+            </button>
+            <button
+              onClick={startBrain}
+              className="rounded-lg bg-zinc-900 dark:bg-zinc-100 px-4 py-2 text-xs font-medium text-white dark:text-zinc-900 hover:bg-zinc-700 dark:hover:bg-zinc-300 transition-colors"
+            >
+              Start Chatting
+            </button>
+          </div>
         </header>
 
         <div className="flex flex-1 overflow-hidden">
-          {/* File tabs */}
           <div className="w-48 border-r border-zinc-200 dark:border-zinc-800 overflow-y-auto py-2">
             {files.map((file, i) => (
               <button
@@ -179,7 +287,6 @@ export default function Home() {
             ))}
           </div>
 
-          {/* File content */}
           <div className="flex-1 overflow-y-auto px-8 py-6">
             <div className="max-w-2xl">
               <div className="flex items-center justify-between mb-4">
@@ -196,6 +303,14 @@ export default function Home() {
               <pre className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800 dark:text-zinc-200 font-sans">
                 {files[activeFile].content}
               </pre>
+              <div className="mt-16 pt-8 border-t border-zinc-200 dark:border-zinc-800">
+                <button
+                  onClick={resetAll}
+                  className="text-xs text-zinc-400 dark:text-zinc-600 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                >
+                  Reset and start over
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -203,7 +318,10 @@ export default function Home() {
     );
   }
 
-  // Chat interface
+  // Chat interface (onboarding or brain)
+  const isBrain = mode === "brain";
+  const currentMessages = isBrain ? brainMessages : messages;
+
   return (
     <div className="flex flex-col h-screen bg-zinc-50 dark:bg-zinc-950">
       <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-4 flex items-center justify-between">
@@ -212,23 +330,52 @@ export default function Home() {
             Second Brain
           </h1>
           <p className="text-xs text-zinc-400 dark:text-zinc-600 mt-0.5">
-            Onboarding
+            {isBrain ? "Chat" : "Onboarding"}
           </p>
         </div>
-        {messages.length >= 6 && (
-          <button
-            onClick={handleFinish}
-            disabled={generating || loading}
-            className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 disabled:opacity-40 transition-colors"
-          >
-            {generating ? "Building…" : "Finish & Build"}
-          </button>
-        )}
+        <div className="flex gap-2">
+          {isBrain && (
+            <div className="flex items-center gap-2">
+              {updateStatus && (
+                <span className="text-xs text-zinc-400 dark:text-zinc-500">
+                  {updateStatus}
+                </span>
+              )}
+              <button
+                onClick={handleUpdateVault}
+                disabled={updating || brainMessages.length === 0}
+                className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 disabled:opacity-40 transition-colors"
+              >
+                {updating ? "Updating…" : "Update Vault"}
+              </button>
+              <button
+                onClick={viewFiles}
+                className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
+              >
+                View Files
+              </button>
+            </div>
+          )}
+          {!isBrain && messages.length >= 6 && (
+            <button
+              onClick={handleFinish}
+              disabled={generating || loading}
+              className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 disabled:opacity-40 transition-colors"
+            >
+              {generating ? "Building…" : "Finish & Build"}
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-2xl mx-auto space-y-4">
-          {messages.map((msg, i) => (
+          {currentMessages.length === 0 && isBrain && (
+            <p className="text-center text-zinc-400 dark:text-zinc-600 mt-32">
+              Ask your second brain anything.
+            </p>
+          )}
+          {currentMessages.map((msg, i) => (
             <div
               key={i}
               className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
