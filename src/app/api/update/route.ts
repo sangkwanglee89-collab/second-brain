@@ -7,16 +7,27 @@ const UPDATE_SYSTEM_PROMPT = `You are a vault updater for a personal "second bra
 1. The user's current vault (a set of markdown files)
 2. A recent conversation between the user and their second brain
 
-Your job: determine if the conversation revealed anything new or changed about the user that should be reflected in their vault. If so, produce updated files. If not, say so.
+Your job: determine if the conversation revealed anything new, changed, or deepened about the user that should be reflected in their vault. If so, produce updated files. If not, say so.
+
+## What Counts as an Update
+
+Be LIBERAL about detecting updates. If the user discussed any of these, the vault should be updated:
+- New information not currently in any vault file (new project, new person, new decision, new timeline)
+- A shift in perspective or emotional state about something already in the vault
+- A decision that was previously open and is now resolved (or more resolved)
+- New context that enriches an existing section (e.g., concrete details about something previously mentioned in general terms)
+- A new life domain or topic that doesn't have a file yet
+
+The bar is: "Would a future version of the user's second brain be more helpful if it knew this?" If yes, update.
+
+Do NOT skip updates just because the vault already covers the general topic. If the conversation added specifics, nuance, decisions, or new framing, that's an update.
 
 ## Rules
 
-- Only update files where meaningful new information was shared. Do not rewrite files just to rephrase existing content.
-- If a new life domain emerged that doesn't have a file yet, create one.
-- If existing information has changed (e.g., they got a new job, changed a goal, shifted a perspective), update the relevant section.
 - Preserve everything in the existing files that is still accurate. Do not remove content unless it has been explicitly superseded.
 - Use the same writing style as the existing files — match their tone and structure.
 - Do NOT add information that wasn't discussed in the conversation. No inferences beyond what was explicitly shared.
+- When updating a large file, you MUST include the complete file content — not just the changed section. The output replaces the file entirely.
 
 ## Output Format
 
@@ -47,7 +58,7 @@ export async function POST(req: NextRequest) {
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 4096,
+    max_tokens: 16384,
     system: UPDATE_SYSTEM_PROMPT,
     messages: [
       {
