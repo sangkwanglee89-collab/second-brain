@@ -19,4 +19,19 @@ export type Partnership = {
   partnerEmail: string;
 } | null;
 
+export type Conversation = {
+  id: string;
+  title: string;
+  chat_type: "brain" | "partner";
+  messages: Message[];
+  updated_at: string;
+};
+
+export type PendingUpdate = {
+  name: string;
+  oldContent: string;
+  newContent: string;
+  approved: boolean;
+};
+
 export type AppMode = "loading" | "welcome" | "onboarding" | "results" | "brain" | "partner-chat" | "settings";

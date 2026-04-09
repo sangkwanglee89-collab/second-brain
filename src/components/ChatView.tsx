@@ -23,6 +23,8 @@ type ChatViewProps = {
   onViewFiles: () => void;
   onOpenSettings: () => void;
   onBackToBrain: () => void;
+  onToggleSidebar?: () => void;
+  showSidebarToggle?: boolean;
 };
 
 function ThinkingDots({ variant }: { variant: "default" | "partner" }) {
@@ -62,6 +64,8 @@ export default function ChatView({
   onViewFiles,
   onOpenSettings,
   onBackToBrain,
+  onToggleSidebar,
+  showSidebarToggle,
 }: ChatViewProps) {
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -86,6 +90,17 @@ export default function ChatView({
       {/* Header */}
       <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-3.5 flex items-center justify-between">
         <div className="flex items-center gap-3">
+          {showSidebarToggle && (
+            <button
+              onClick={onToggleSidebar}
+              className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors md:hidden"
+              title="Conversations"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M3 5h14M3 10h14M3 15h14" />
+              </svg>
+            </button>
+          )}
           {isPartnerChat && (
             <button
               onClick={onBackToBrain}

@@ -3,24 +3,33 @@ import { NextRequest } from "next/server";
 
 const client = new Anthropic();
 
-const GENERATE_SYSTEM_PROMPT = `You are a structured data extractor. You will receive a full onboarding conversation between a user and an AI assistant. Your job is to synthesize that conversation into a set of markdown files that form the user's "second brain."
+const GENERATE_SYSTEM_PROMPT = `You are a structured data extractor. You will receive a full onboarding conversation between a user and an AI assistant. Your job is to synthesize that conversation into a set of markdown files that form the user's "second brain" — a personal vault that a future AI will use to know this person and think with them.
 
 ## Output Format
 
 Respond with a valid JSON object containing a "files" array. Each file has a "name" and "content" field.
 
 You MUST produce:
-1. **identity.md** — A profile of who this person is. Include: name, age, background, family, location, personality traits you observed, how they think, what matters to them, what's on their mind right now. Write it as a living snapshot, not a resume. Use natural prose with markdown headers to organize sections.
 
-2. **3-5 domain files** — One per major life area that emerged from the conversation. Name each file after the domain in lowercase (e.g., "career.md", "family.md", "fitness.md", "golf.md"). Each domain file should capture: what's happening in this area, what they care about, what tensions or goals exist, and any relevant details. Keep it concise but substantive.
+1. **identity.md** — A profile of who this person IS. This is the person, not any single topic. Include: name, age, background, family, location, personality traits you observed, how they think, what matters to them, what's on their mind right now, what tensions or open questions they're sitting with. Write it as a living snapshot — how a close friend would describe them to someone who needs to understand them quickly. Use natural prose with markdown headers.
 
-## Writing Style
+   Identity is NOT a summary of the domain files. It captures the person across all domains — their psychology, their patterns, what drives them, what they're wrestling with at a life level.
 
-- Write as if you're capturing a snapshot for a future AI that needs to understand this person quickly
-- Use the person's own language where possible — don't sanitize or formalize their voice
-- Include specific details, not just generalities. "Plays golf on weekends" is weak. "Trying to break 90, working on iron contact, plays at [course name]" is useful.
-- Organize with markdown headers (##) but keep it readable, not bureaucratic
-- Do NOT include information that wasn't discussed in the conversation — no assumptions or inferences beyond what was explicitly shared
+2. **3-5 domain files** — One per major life area that emerged from the conversation. Name each file after the domain in lowercase (e.g., "career.md", "family.md", "fitness.md"). Each domain file is an operational snapshot:
+   - What's happening in this area RIGHT NOW
+   - What they care about and why
+   - What tensions, goals, or open questions exist
+   - Specific details — names, numbers, timelines, their own words
+
+   Domain files capture current state, not history. They should read like a briefing document: "Here's where things stand as of today."
+
+## Writing Principles
+
+- **Snapshot, not archive.** Write what's true now. Don't hedge with "they mentioned" or "they said" — state it directly. "Works as a director at Pacific Life" not "They mentioned working at Pacific Life."
+- **Specific over general.** "Plays golf on weekends" is weak. "Working on breaking 90, struggling with iron contact, plays at Sunset Valley" is useful.
+- **Their language, not yours.** Preserve how they actually talk about things. If they said "brain rot" don't write "excessive screen time."
+- **Separate identity from domains.** Identity.md should make sense even if you never read any domain file. Each domain file should stand on its own. They overlap intentionally — identity might note "energized by golf progress this season" even though golf.md has the stats.
+- **Do NOT infer facts that weren't stated.** If someone says their child was born in 2020, do not calculate or state the child's current age. Only include what was explicitly shared.
 
 ## Example Output Structure
 
